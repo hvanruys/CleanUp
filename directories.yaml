@@ -1,0 +1,60 @@
+---
+filetemplates:
+  - avhrr_*_noaa19.hrp.bz2
+  - S3A_OL_1_ERR*.SEN3.tar
+  - OR_ABI-L1b*
+  - S3B_OL_1_EFR*SEN3.tar
+  - S3B_OL_1_ERR*SEN3.tar
+  - AVHR_HRP_00_M*.bz2
+  - AVHR_xxx_1B_M*
+  - FY3D*
+  - W_XX-EUMETSAT*MTI1+FCI-1C*BODY*
+  - W_XX-EUMETSAT*MTI1+FCI-1C*TRAIL*
+  - OR_SUVI-L1b*
+  - AVHR_GAC_1B_N19_*
+  - H-000-*
+  - Z_SATE_C_BABJ_*_FDI_*_NOM.HDF.gz
+  - IMG_DK*
+  - SVDNBC_*
+  - SVMC_*
+  - L-000-MSG4__-GOES15*
+  - S3A_OL_1_EFR*.SEN3.tar
+  - W_XX-EUMETSAT*MTI1+LI-2-..-*BODY*
+  - W_XX-EUMETSAT*MTI1+LI-2-..-*TRAIL*
+  - W_XX-EUMETSAT*MTI1+LI-2-...-*BODY*
+  - W_XX-EUMETSAT*MTI1+LI-2-...-*TRAIL*
+  
+startdates: [ 6, 16, 27, 16, 16, 16, 16, 5, 110, 111, 23, 16, 46, 14, 12, 12, 10, 46, 16, 97, 98, 98, 99 ]
+
+# basepaths:
+#   - /media/hugo/Vol4T/received/hvs-1/E1H-RDS-1
+#   - /media/hugo/Vol4T/received/bas/E1B-TPG-1
+#   - /media/hugo/Vol4T/received/bas/E1B-EPS-N-15
+#   - /media/hugo/Vol3T/received/hvs-2/E2H-S3A-02
+#   - /media/hugo/Vol3T/received/hvs-2/E2H-S3B-02
+#   - /media/hugo/Vol4T/received/bas/E1B-EPS-15
+#   - /media/hugo/Vol4T/received/hvs-1/E1H-TPG-4
+#   - /media/hugo/Vol4T/received/bas/E1B-GEO-3
+#   - /media/hugo/Vol4T/received/hvs-1/E1H-RDS-2
+#   - /media/hugo/Vol4T/received/hvs-1/E1H-TPG-5
+#   - /media/hugo/Vol3T/received/hvs-2/E2H-MTG-1
+#   - /media/hugo/Vol4T/received/hvs-1/E2H-RDS-2
+#   - /media/hugo/Vol4T/received/bas/E1B-GEO-5
+#   - /media/hugo/Vol4T/received/hvs-1/E1H-TPG-2
+#   - /media/hugo/Vol4T/received/bas/E1B-EPS-10
+#   - /media/hugo/Vol4T/received/bas/E1B-GEO-1
+#   - /media/hugo/Vol4T/received/bas/E1B-RDS-2
+#   - /media/hugo/Vol4T/received/bas/E1B-RDS-1
+#   - /media/hugo/Vol4T/received/hvs-1/E1H-TPG-1
+#   - /media/hugo/Vol3T/received/hvs-2/E2H-MTG-LI
+
+basepaths:
+  - /mnt/nfs_Vol3T/received/hvs-2/E2H-MTG-LI
+
+disks:
+  - /media/hugo/Vol4T
+  - /media/hugo/Vol3T
+
+freediskspaces:
+  - 30
+  - 20
