@@ -49,7 +49,7 @@ startdates: [ 6, 16, 27, 16, 16, 16, 16, 5, 110, 111, 23, 16, 46, 14, 12, 12, 10
 #   - /media/hugo/Vol3T/received/hvs-2/E2H-MTG-LI
 
 basepaths:
-  - /mnt/nfs_Vol3T/received/hvs-2/E2H-MTG-LI
+  - /home/hugo/go-examples/received/E2H-MTG-LI
 
 disks:
   - /media/hugo/Vol4T

@@ -1,0 +1,106 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"time"
+	"gopkg.in/yaml.v3"
+)
+
+// Function for the 5-second event
+func eventEvery5Seconds(done chan bool) {
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			fmt.Println("Event 1: Executing every 5 seconds")
+			time.Sleep(5 * time.Second)
+		}
+	}
+}
+
+// Function for the 10-second event
+func eventEvery10Seconds(done chan bool) {
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			fmt.Println("Event 2: Executing every 10 seconds")
+			time.Sleep(10 * time.Second)
+		}
+	}
+}
+
+// Define structs to match the YAML structure
+type YAMLConfig struct {
+	FileTemplates  []string `yaml:"filetemplates"`
+	StartDates     []int    `yaml:"startdates"`
+	BasePaths      []string `yaml:"basepaths"`
+	Disks          []string `yaml:"disks"`
+	FreeDiskSpaces []int    `yaml:"freediskspaces"`
+}
+
+func main() {
+	data, err := os.ReadFile("directories.yaml")
+	if err != nil {
+		log.Fatalf("Error reading YAML file: %v", err)
+	}
+	
+
+	// Parse the YAML content
+	var yamlconfig YAMLConfig
+	yaml.Unmarshal(data, &yamlconfig)
+	
+	if err != nil {
+		log.Fatalf("Error parsing YAML: %v", err)
+	}
+
+	// Print the parsed content
+	fmt.Println("File Templates:")
+	for i, template := range yamlconfig.FileTemplates {
+		fmt.Printf("  %d: %s\n", i+1, template)
+	}
+
+	fmt.Println("\nStart Dates:")
+	for i, date := range yamlconfig.StartDates {
+		fmt.Printf("  %d: %d\n", i+1, date)
+	}
+
+	fmt.Println("\nBase Paths:")
+	for i, path := range yamlconfig.BasePaths {
+		fmt.Printf("  %d: %s\n", i+1, path)
+	}
+
+	fmt.Println("\nDisks:")
+	for i, disk := range yamlconfig.Disks {
+		fmt.Printf("  %d: %s\n", i+1, disk)
+	}
+
+	fmt.Println("\nFree Disk Spaces:")
+	for i, space := range yamlconfig.FreeDiskSpaces {
+		fmt.Printf("  %d: %d\n", i+1, space)
+	}
+
+	fmt.Println("Starting event scheduler...")
+
+	// Channel to signal goroutines to stop
+	done := make(chan bool)
+
+	// Start goroutines for each event
+	go eventEvery5Seconds(done)
+	go eventEvery10Seconds(done)
+
+	// Let the events run for 30 seconds
+	time.Sleep(30 * time.Second)
+
+	// Signal goroutines to stop
+	close(done)
+
+	// Give a moment for goroutines to exit cleanly
+	time.Sleep(1 * time.Second)
+
+	fmt.Println("Program terminated.")
+}
