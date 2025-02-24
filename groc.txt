@@ -1,6 +1,0 @@
-/*
-Create a function called 'DeleteOldDirectories' that iterates over 'BasePaths' and the subdirectories of the form YYYY/MM/DD.
-The function should delete the oldest directories until there is a free diskspace of 20% of the total disk capacity.
-
-
-*/
