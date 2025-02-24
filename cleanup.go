@@ -21,12 +21,25 @@ the file should be deleted. The function should not have any arguments and shoul
 'FileTemplates' and 'StartDates' do not match. The function should return an error if the date substring of the filename is not valid.
 Note: The function should be able to handle any number of files and directories.
 */
+/*
+DeleteOldDirectories
+--------------------
+Problem Statement:
+We have an array of strings called 'BasePaths' that contains the base paths. 
+We want to delete the oldest subdirectories in the base paths until we reach 20% free space.
+The subdirectories of the base paths are in the format YYYY/MM/DD.
+Write a golang function called 'DeleteOldDirectories' that deletes the oldest directories in the base paths until we reach 20% free space.
+There are only files in the DD directories. Sort the directories by YYYY , then MM, then DD (the oldest first).
+When a YYYY directory is empty, it should be deleted. When an MM directory is empty, it should be deleted. 
+When a DD directory is empty, it should be deleted.
+The function should not have any arguments and should return an error.
+
+*/
 package main
 
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
 	"log"
 	"os"
 	"path/filepath"
@@ -36,6 +49,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Define structs to match the YAML structure
@@ -182,81 +197,138 @@ type DirectoryInfo struct {
 	ModTime int64
 }
 
-func DeleteOldDirectories(basePaths []string) error {
-	fmt.Printf("Deleting old directories in %v\n", basePaths)
+func DeleteOldDirectories() error {
+    fmt.Println("Deleting old directories")
+    // Collect all DD directories (format YYYY/MM/DD) from each base path.
+    var directories []DirectoryInfo
 
-	// Regular expression for YYYY/MM/DD pattern
-	datePattern := regexp.MustCompile(`^\d{4}/\d{2}/\d{2}$`)
+    for _, basePath := range yamlconfig.BasePaths {
+        // Construct a glob pattern for candidate DD directories.
+        pattern := filepath.Join(basePath, "????", "??", "??")
+        matches, err := filepath.Glob(pattern)
+        if err != nil {
+            return fmt.Errorf("failed to glob pattern %s: %v", pattern, err)
+        }
 
-	// Collect all matching directories
-	var directories []DirectoryInfo
-	for _, basePath := range basePaths {
-		err := filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
+        // Process the matched paths.
+        for _, match := range matches {
+            info, err := os.Stat(match)
+            if err != nil || !info.IsDir() {
+                continue
+            }
+            // Get the relative path from basePath; expected to be "YYYY/MM/DD"
+            relPath, err := filepath.Rel(basePath, match)
+            if err != nil {
+                continue
+            }
+            parts := strings.Split(relPath, string(os.PathSeparator))
+            if len(parts) != 3 {
+                continue
+            }
+            year, month, day := parts[0], parts[1], parts[2]
+            if len(year) != 4 || len(month) != 2 || len(day) != 2 {
+                continue
+            }
+            // Build a date key, e.g. 20220225.
+            //dateKey := year + month + day
+            directories = append(directories, DirectoryInfo{
+                Path:    match,
+                ModTime: 0, // Not used for sorting; we sort by dateKey instead.
+                // Reusing ModTime to store the numeric representation of date.
+            })
+            // In this example we do not directly store the dateKey;
+            // instead, we will sort using the relative path string.
+        }
+    }
 
-			// Get relative path from base
-			relPath, err := filepath.Rel(basePath, path)
-			if err != nil {
-				return err
-			}
+    // Sort the directories by their date extracted from the relative path.
+    sort.Slice(directories, func(i, j int) bool {
+        // Assume the directory paths are in the format base/ YYYY/MM/DD.
+        // Extract the relative path and remove path separators.
+        getDateKey := func(path string) string {
+            // Find the position of the base directory among yamlconfig.BasePaths.
+            // We assume the first matching basePath.
+            for _, base := range yamlconfig.BasePaths {
+                rel, err := filepath.Rel(base, path)
+                if err == nil && rel != path {
+                    // Remove path separators; "2022/02/25" becomes "20220225"
+                    return strings.ReplaceAll(rel, string(os.PathSeparator), "")
+                }
+            }
+            return path
+        }
+        return getDateKey(directories[i].Path) < getDateKey(directories[j].Path)
+    })
 
-			// Check if directory matches YYYY/MM/DD pattern
-			if info.IsDir() && datePattern.MatchString(relPath) {
-				directories = append(directories, DirectoryInfo{
-					Path:    path,
-					ModTime: info.ModTime().Unix(),
-				})
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("error walking path %s: %v", basePath, err)
-		}
-	}
+    // Loop until free disk space is 20% or more.
+    //for len(directories) > 0 {
+        freeSpace, err := getFreeSpacePercentage()
+        if err != nil {
+            return fmt.Errorf("error getting free space: %v", err)
+        }
+        fmt.Printf("Current free space: %.2f%%\n", freeSpace)
+		
+        if freeSpace >= 20.0 {
+            //break
+        }
 
-	// Sort directories by modification time (oldest first)
-	sort.Slice(directories, func(i, j int) bool {
-		return directories[i].ModTime < directories[j].ModTime
-	})
+        // Delete the oldest directory (first in the sorted slice).
+        oldestDir := directories[0]
+        fmt.Printf("Deleting directory: %s\n", oldestDir.Path)
+        //if err := os.RemoveAll(oldestDir.Path); err != nil {
+        //    return fmt.Errorf("error deleting directory %s: %v", oldestDir.Path, err)
+        //}
 
-	// Keep deleting oldest directories until we reach 20% free space
-	for len(directories) > 0 {
-		freeSpace, err := getFreeSpacePercentage()
-		if err != nil {
-			return fmt.Errorf("error getting free space: %v", err)
-		}
+        // After deleting the DD directory, attempt to clean up empty parent directories.
+        cleanUpEmptyAncestors(oldestDir.Path)
 
-		if freeSpace >= 20.0 {
-			break
-		}
+        // Remove the deleted directory from our slice.
+        directories = directories[1:]
+    //}
 
-		// Delete oldest directory
-		oldestDir := directories[0]
-		directories = directories[1:]
-
-		err = os.RemoveAll(oldestDir.Path)
-		if err != nil {
-			return fmt.Errorf("error deleting directory %s: %v", oldestDir.Path, err)
-		}
-	}
-
-	return nil
+    return nil
 }
 
-// getFreeSpacePercentage returns the percentage of free disk space
+// cleanUpEmptyAncestors deletes empty parent directories
+// (e.g. the MM and YYYY directories) up to the corresponding BasePath.
+func cleanUpEmptyAncestors(deletedPath string) {
+    // Walk upward from the deleted directory.
+    dir := filepath.Dir(deletedPath)
+    for {
+        // List entries in the current directory.
+        entries, err := os.ReadDir(dir)
+        if err != nil {
+            break
+        }
+        // If directory is not empty, or if it is one of the base paths, stop.
+        if len(entries) > 0 {
+            break
+        }
+        // Delete the empty directory.
+        if err := os.Remove(dir); err != nil {
+            break
+        }
+        // Get the new parent.
+        parent := filepath.Dir(dir)
+        // Stop if we've reached a base path (or root).
+        if parent == dir {
+            break
+        }
+        dir = parent
+    }
+}
+
+// getFreeSpacePercentage returns the percentage of free disk space.
 func getFreeSpacePercentage() (float64, error) {
-	var stat syscall.Statfs_t
-	err := syscall.Statfs("/", &stat)
-	if err != nil {
-		return 0, err
-	}
-
-	totalSpace := float64(stat.Blocks) * float64(stat.Bsize)
-	freeSpace := float64(stat.Bavail) * float64(stat.Bsize)
-
-	return (freeSpace / totalSpace) * 100, nil
+    var stat syscall.Statfs_t
+    // Change "/" to a desired mount point if needed.
+    err := syscall.Statfs("/", &stat)
+    if err != nil {
+        return 0, err
+    }
+    totalSpace := float64(stat.Blocks) * float64(stat.Bsize)
+    freeSpace := float64(stat.Bavail) * float64(stat.Bsize)
+    return (freeSpace / totalSpace) * 100, nil
 }
 
 // isNumeric checks if a string is purely numeric
@@ -350,31 +422,29 @@ func main() {
 		fmt.Printf("%s\n", regexPatterns[i].String())
 	}
 
-	err = moveFilesToDateSubdirs()
+	// err = moveFilesToDateSubdirs()
+	// if err != nil {
+	// 	fmt.Printf("Error: %v\n", err)
+	// } else {
+	// 	fmt.Println("File moving completed successfully.")
+	// }
+
+	err = DeleteOldDirectories()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 	} else {
-		fmt.Println("File moving completed successfully.")
+		fmt.Println("Delete old directories completed successfully.")
 	}
 
-	fmt.Println("Starting event scheduler...")
+	// fmt.Println("Starting event scheduler...")
 
-	// Channel to signal goroutines to stop
-	done := make(chan bool)
+	// // Channel to signal goroutines to stop
+	// done := make(chan bool)
 
-	// Start goroutines for each event
-	go eventDeleteOldDirs(done)
-	go eventMoveFiles(done)
+	// // Start goroutines for each event
+	// go eventDeleteOldDirs(done)
+	// go eventMoveFiles(done)
 
-	// Let the events run for 30 seconds
-	//time.Sleep(30 * time.Second)
-	select {}
-	// Signal goroutines to stop
-	// close(done)
-
-	// // Give a moment for goroutines to exit cleanly
-	// time.Sleep(1 * time.Second)
-
-	// fmt.Println("Program terminated.")
+	// select {}
 
 }
