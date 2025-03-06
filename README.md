@@ -85,5 +85,6 @@ disks:
 ```yaml
 portnumber: 7000
 ```
+![CleanUp](https://github.com/user-attachments/assets/b29d2309-519d-45b2-a383-1fd2e3b99d19)
 
 
