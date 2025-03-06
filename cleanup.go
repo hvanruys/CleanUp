@@ -39,8 +39,7 @@ package main
 
 import (
 	"fmt"
-
-	"gopkg.in/yaml.v3"
+	"encoding/json"
 	"log"
 	"math"
 	"os"
@@ -51,6 +50,14 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"sync"
+	"net"
+	"net/http"
+
+	"github.com/gorilla/websocket"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
+	"gopkg.in/yaml.v3"
 )
 
 type StructTemplate struct {
@@ -65,15 +72,34 @@ type StructDisks struct {
 }
 
 type YAMLConfig struct {
-	FileTemplates []StructTemplate `yaml:"filetemplates"`
-	BasePaths     []string         `yaml:"basepaths"`
-	Disks         []StructDisks    `yaml:"disks"`
+	FileTemplates []StructTemplate 	`yaml:"filetemplates"`
+	BasePaths     []string         	`yaml:"basepaths"`
+	Disks         []StructDisks    	`yaml:"disks"`
+	PortNumber	  string			`yaml:"portnumber"`
 }
 
 var yamlconfig YAMLConfig
-
-// Global slice of compiled regexps
 var regexPatterns []*regexp.Regexp
+var portnumber = "7000"
+
+// SystemMetrics represents CPU and Disk data for sending to the client
+type SystemMetrics struct {
+	CoreUsages []float64   		`json:"core_usages"` // Percentage for each core
+	DiskUsed   []float64   		`json:"disks_used"`   // Percentage of disk space used
+	DiskFree   []float64   		`json:"disks_free"`   // Percentage of disk space free
+	Timestamp  int64       		`json:"timestamp"`   // Unix timestamp in milliseconds
+	DiskLabel  []string    		`json:"disks_label"`	// Label for disk
+	DiskTotal  []uint64    		`json:"disks_total"`	// Total disk space
+	AvailDirs  []string			`json:"avail_dirs"`
+}
+
+// Global variables
+var (
+	clients   = make(map[*websocket.Conn]bool)
+	//broadcast = make(chan SystemMetrics)
+	mutex     sync.Mutex
+)
+
 
 // Function for the 10-second event
 func eventMoveFiles(done chan bool) {
@@ -470,6 +496,12 @@ func main() {
 	// 	fmt.Printf("%s\n", regexPatterns[i].String())
 	// }
 
+	ips, err := GetLocalIPs()
+	if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(ips)
+
 	err = moveFilesToDateSubdirs()
 	if err != nil {
 		fmt.Printf("Error moveFilesToDateSubdirs: %v\n", err)
@@ -495,6 +527,284 @@ func main() {
 	go eventDeleteOldDirs(done)
 	go eventMoveFiles(done)
 
-	select {}
+//	select {}
 
+	// Start collecting and broadcasting metrics
+	go collectMetrics()
+
+	// WebSocket handler for real-time updates
+	http.HandleFunc("/ws", handleWebSocket)
+
+	// Serve the HTML page
+	http.HandleFunc("/", serveIndex)
+
+	// Serve static files (e.g., Plotly.js)
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+
+	// Register /disks endpoint to list available hard disks
+    http.HandleFunc("/disks", diskListHandler)
+
+	log.Println("Server starting on :" + portnumber + "...")
+	log.Fatal(http.ListenAndServe(":" + portnumber, nil))
+
+
+}
+
+func collectMetrics() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	// Keep the last 100 data points for each core
+	const maxPoints = 100
+	var coreData = make(map[int][]float64) // Maps core index to usage history
+	var timestamps []int64                 // Shared timestamps for all cores
+
+	counter := 60
+	var availdirs []string
+
+	for range ticker.C {
+		counter++
+        
+		var diskused []float64
+		var diskfree []float64
+		var disktotal []uint64
+		var disklabels []string
+		
+		
+        // Execute checkDateDirs every 10 seconds
+        if counter >= 60 {
+			availdirs = nil
+			for _, basePath := range yamlconfig.BasePaths {
+            	//fmt.Printf("Checking date directories... %s\n", basePath)
+				
+            	thedirstring, err := constructDirString(basePath)
+            	if err != nil {
+	                fmt.Printf("Error checking directories: %v\n", err)
+            	}
+				
+				availdirs = append(availdirs, thedirstring)
+			}
+            // Reset the counter
+            counter = 0
+		}
+		// Get CPU usage per core
+		usages, err := cpu.Percent(0, true) // Get per-core CPU usage, 0 for instantaneous
+		if err != nil {
+			log.Printf("Error getting CPU usage: %v", err)
+			continue
+		}
+
+		for _, disk := range yamlconfig.Disks {
+			diskUsage, err := getDiskUsage(disk.DiskName)
+			if err != nil {
+				log.Printf("Error getting disk usage: %v", err)
+				continue
+			}
+			diskused = append(diskused, diskUsage.UsedPercent)
+			disktotal = append(disktotal, diskUsage.Total / 1024 / 1024 / 1024)
+			diskfree = append(diskfree, 100 - diskUsage.UsedPercent)
+			disklabels = append(disklabels, disk.DiskName)
+			
+		}
+
+		now := time.Now().UnixMilli()
+		metrics := SystemMetrics{
+			CoreUsages: make([]float64, len(usages)),
+			DiskUsed:   make([]float64, len(diskused)),
+			DiskFree:   make([]float64, len(diskfree)),
+			Timestamp:  now,
+			DiskLabel:  make([]string, len(disklabels)),
+			DiskTotal:  make([]uint64, len(disktotal)),
+			AvailDirs:  make([]string, len(availdirs)),
+		}
+
+		// Copy current CPU usage to metrics
+		copy(metrics.CoreUsages, usages) // Usage in percentage (0-100)
+		copy(metrics.DiskUsed, diskused) // Usage in percentage (0-100)
+		copy(metrics.DiskFree, diskfree) // Usage in percentage (0-100)
+		copy(metrics.DiskLabel, disklabels) // Usage in percentage (0-100)
+		copy(metrics.DiskTotal, disktotal) // Usage in percentage (0-100)
+		copy(metrics.AvailDirs, availdirs) 
+
+		// Add new data to history
+		mutex.Lock()
+		timestamps = append(timestamps, now)
+		for i := range metrics.CoreUsages {
+			coreData[i] = append(coreData[i], metrics.CoreUsages[i])
+			if len(coreData[i]) > maxPoints {
+				coreData[i] = coreData[i][1:] // Remove oldest point
+			}
+		}
+		if len(timestamps) > maxPoints {
+			timestamps = timestamps[1:] // Sync timestamps with data
+		}
+
+		// Broadcast current metrics to all clients
+		for client := range clients {
+			err := client.WriteJSON(metrics)
+			if err != nil {
+				log.Printf("Error broadcasting to client: %v", err)
+				client.Close()
+				delete(clients, client)
+			}
+		}
+		mutex.Unlock()
+	}
+}
+
+func getDiskUsage(path string) (*disk.UsageStat, error) {
+	usage, err := disk.Usage(path)
+	if err != nil {
+		return nil, err
+	}
+	return usage, nil
+}
+
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Error upgrading to WebSocket: %v", err)
+		http.Error(w, "WebSocket upgrade failed", http.StatusBadRequest)
+		return
+	}
+	defer conn.Close()
+
+	mutex.Lock()
+	clients[conn] = true
+	mutex.Unlock()
+
+	log.Printf("New WebSocket client connected")
+
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("WebSocket client disconnected: %v", err)
+			mutex.Lock()
+			delete(clients, conn)
+			mutex.Unlock()
+			break
+		}
+	}
+}
+
+func serveIndex(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "index.html")
+}
+
+func diskListHandler(w http.ResponseWriter, r *http.Request) {
+    partitions, err := disk.Partitions(true)
+    if err != nil {
+        http.Error(w, "Failed to get partitions", http.StatusInternalServerError)
+        return
+    }
+
+    // Optionally build a custom list if you don't need all partition details.
+	type diskInfo struct {
+		Device     string   `json:"device"`
+		Mountpoint string   `json:"mountpoint"`
+		Fstype     string   `json:"fstype"`
+		Opts       []string `json:"opts"`
+	}
+    disks := []diskInfo{}
+    for _, p := range partitions {
+        disks = append(disks, diskInfo{
+            Device:     p.Device,
+            Mountpoint: p.Mountpoint,
+            Fstype:     p.Fstype,
+            Opts:       p.Opts,
+        })
+    }
+
+    jsonData, err := json.Marshal(disks)
+    if err != nil {
+        http.Error(w, "Failed to marshal disks", http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    w.Write(jsonData)
+}
+
+func GetLocalIP() net.IP {
+    conn, err := net.Dial("udp", "80.80.80.80:80")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer conn.Close()
+
+    localAddress := conn.LocalAddr().(*net.UDPAddr)
+
+    return localAddress.IP
+}
+
+func GetLocalIPs() ([]net.IP, error) {
+    var ips []net.IP
+    addresses, err := net.InterfaceAddrs()
+    if err != nil {
+        return nil, err
+    }
+
+    for _, addr := range addresses {
+        if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+            if ipnet.IP.To4() != nil {
+                ips = append(ips, ipnet.IP)
+            }
+        }
+    }
+    return ips, nil
+}
+
+func constructDirString(basePath string) (string, error) {
+	var availDirs string
+	
+	// Get list of year directories
+	years, err := os.ReadDir(basePath)
+    
+    if err != nil {
+        return "", err
+    }
+	var basePathstr = basePath + "|"
+    for _, year := range years {
+		
+        if !year.IsDir() {
+            continue // Skip if not a directory
+        }
+        yearPath := filepath.Join(basePath, year.Name())
+
+		availDirs = basePathstr + "Y:" + year.Name()
+
+        // Get months for this year
+        months, err := os.ReadDir(yearPath)
+        if err != nil {
+            return "", err
+        }
+        
+        for _, month := range months {
+
+            if !month.IsDir() {
+                continue
+            }
+			availDirs += "-M:" + month.Name() + "-D:"
+            monthPath := filepath.Join(yearPath, month.Name())
+            
+            // Get days for this month
+            days, err := os.ReadDir(monthPath)
+            if err != nil {
+                return "", err
+            }
+            
+            for _, day := range days {
+                if !day.IsDir() {
+                    continue
+                }
+				availDirs += day.Name() + ","
+			}
+        }
+    }
+    
+    return availDirs, nil	
 }

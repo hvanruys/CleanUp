@@ -75,7 +75,7 @@ basepaths:
   - /media/hugo/Vol4T/received/bas/E1B-TPG-1
   - /media/hugo/Vol3T/received/hvs-2/E2H-S3A-02
   - /media/hugo/Vol3T/received/hvs-2/E2H-S3B-02
-   - /media/hugo/Vol4T/received/hvs-1/E1H-TPG-4
+  - /media/hugo/Vol4T/received/hvs-1/E1H-TPG-4
   - /media/hugo/Vol4T/received/bas/E1B-GEO-3
   - /media/hugo/Vol4T/received/hvs-1/E1H-RDS-2
   - /media/hugo/Vol4T/received/hvs-1/E1H-TPG-5
@@ -89,10 +89,11 @@ basepaths:
   - /media/hugo/Vol4T/received/hvs-1/E1H-TPG-1
   #- /media/hugo/Vol3T/received/hvs-2/E2H-MTG-LI
 
-
-
 disks:
   - diskname: "/media/hugo/Vol4T"
     freediskspace: 30
   - diskname: "/media/hugo/Vol3T"
     freediskspace: 20
+
+portnumber: 7000
+  
