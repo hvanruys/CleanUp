@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+
+
+<head>
+    <meta charset="UTF-8">
+    <script src="/static/plotly-3.0.1.min.js"></script>
+
+    <style>
+        body {
+            background-color: rgb(245, 238, 209);
+        }
+
+        h1 {
+            color: rgb(1, 20, 107);
+            margin-left: 40px;
+        }
+        .container {
+                display: flex;
+                width: auto;
+        }
+        .chart-container {
+            width: auto;
+            display: inline-block;
+            vertical-align: top;
+            margin: 10px;
+            //background-color: #28af07;
+        }
+        .directory-list {
+            width: auto;
+            height: 100%;
+            min-width: 200px;
+            padding: 20px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+        }
+        /* @media(max-width: 768px) {
+            .chart-container, .directory-list {
+                width: 100%;
+                margin-bottom: 20px;
+            }
+        } */
+    </style>
+</head>
+
+<body>
+    <h1>CPU Cores and Disk Usage Dashboard</h1>
+    <div class="container">
+        <div class="chart-container" id="cpu-graph" ></div>
+        <div class="directory-list" id="dir-list"></div>
+    </div>
+    
+    <!-- Replace single disk pie chart with a container for multiple charts -->
+    <div id="disk-charts"></div>
+
+    <script>
+        // Global variables to hold CPU and disk data.
+        const coreData = {}; // Object to store data for each core
+        const maxPoints = 100; // Limit to last 100 points for performance
+
+        // Initialize traces for all cores (up to 32, but dynamically adjust)
+        for (let i = 0; i < 32; i++) {
+            coreData[i] = { x: [], y: [] };
+        }
+
+        // Object to store disk data arrays
+        let diskData = { used: [], free: [], total: [] };
+        // Get the current hostname/IP
+        const wsHost = window.location.hostname;
+        console.log("WebSocket host:", wsHost);
+
+        // Update WebSocket connection to use dynamic host
+        const ws = new WebSocket(`ws://${wsHost}:7000/ws`);
+        let diskLabels = [];
+        let availDirs = "";
+
+ 
+        ws.onopen = function () {
+            console.log("WebSocket connection established");
+        };
+
+        ws.onmessage = function (event) {
+            try {
+                const data = JSON.parse(event.data);
+                const timestamp = new Date(data.timestamp).toLocaleTimeString();
+
+                //console.log("Received data:", data); // Debug log
+
+                // Update CPU data for each core
+                data.core_usages.forEach((usage, index) => {
+                    coreData[index].x.push(timestamp);
+                    coreData[index].y.push(usage);
+                    if (coreData[index].x.length > maxPoints) {
+                        coreData[index].x.shift();
+                        coreData[index].y.shift();
+                    }
+                });
+
+                // Update disk data from the metrics
+                diskData.used = data.disks_used;
+                diskData.free = data.disks_free;
+                diskData.total = data.disks_total;
+                diskLabels = data.disks_label;
+
+                if (data.avail_dirs !== "") {
+                    availDirs = data.avail_dirs;
+                    const list = document.getElementById("dir-list");
+                    list.innerHTML = "";  // Clear current content
+
+                    // Create a table element
+                    const table = document.createElement("table");
+                    table.style.borderCollapse = "collapse";
+                    table.style.width = "100%";
+                    
+                    // Optionally create a header row (if needed)
+                    const header = document.createElement("tr");
+                    const headerCell1 = document.createElement("th");
+                    headerCell1.textContent = "Basepaths";
+                    headerCell1.style.border = "1px solid #ccc";
+                    headerCell1.style.padding = "5px";
+                    headerCell1.style.width = "40%";
+                    const headerCell2 = document.createElement("th");
+                    headerCell2.textContent = "Available Directories";
+                    headerCell2.style.border = "1px solid #ccc";
+                    headerCell2.style.padding = "5px";
+                    headerCell2.style.width = "60%";
+                    header.appendChild(headerCell1);
+                    header.appendChild(headerCell2);
+                    table.appendChild(header);
+
+                    availDirs.forEach((dir) => {
+                        // Split the string at the first occurrence of '|'
+                        // Adjust splitting logic if the token appears more than once.
+                        const parts = dir.split("|");
+                        const col1 = parts[0] ? parts[0].trim() : "";
+                        const col2 = parts[1] ? parts[1].trim() : "";
+                        
+                        const row = document.createElement("tr");
+
+                        const td1 = document.createElement("td");
+                        td1.textContent = col1;
+                        td1.style.border = "1px solid #ccc";
+                        td1.style.padding = "5px";
+                        
+                        const td2 = document.createElement("td");
+                        td2.textContent = col2;
+                        td2.style.border = "1px solid #ccc";
+                        td2.style.padding = "5px";
+
+                        row.appendChild(td1);
+                        row.appendChild(td2);
+                        table.appendChild(row);
+                    });
+                    list.appendChild(table);
+                }
+                console.log("availDirs: ", availDirs);
+
+                updateCharts();
+
+            } catch (e) {
+                console.error("Error processing WebSocket message:", e);
+            }
+        };
+
+        ws.onerror = function (error) {
+            console.error("WebSocket error:", error);
+        };
+
+        ws.onclose = function () {
+            console.log("WebSocket connection closed");
+        };
+
+        function updateCharts() {
+            // Update CPU cores line graph
+            const cpuTraces = [];
+            for (let i = 0; i < 32; i++) {
+                if (coreData[i].y.length > 0) { // Only include cores with data
+                    cpuTraces.push({
+                        x: coreData[i].x,
+                        y: coreData[i].y,
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: `Core ${i + 1}`,
+                        line: { width: 1 }
+                    });
+                }
+            }
+
+            const cpuLayout = {
+                title: {
+                    text: 'CPU Cores Usage (%)',
+                    font: { family: 'Courier New, monospace', size: 16 },
+                    xref: 'paper',
+                    x: 0.05,
+                },
+                xaxis: { title: 'Time' },
+                yaxis: { title: 'Percentage (%)', range: [0, 100] },
+                legend: { orientation: 'h', y: -0.4 },
+                height: 500,
+                width: 800
+
+            };
+
+            Plotly.newPlot('cpu-graph', cpuTraces, cpuLayout, { responsive: true });
+            window.addEventListener('resize', function() {
+                Plotly.Plots.resize(document.getElementById('cpu-graph'));
+            });
+
+            // Update Disk Pie charts for each disk.
+            const diskChartsContainer = document.getElementById('disk-charts');
+            // Clear previous charts
+            diskChartsContainer.innerHTML = "";
+            // Create a chart for each disk in the arrays
+            for (let i = 0; i < diskData.used.length; i++) {
+                // Create a new div for each disk chart
+                const chartId = 'disk-pie-' + i;
+                const chartDiv = document.createElement('div');
+                chartDiv.id = chartId;
+                chartDiv.className = "chart-container";
+                diskChartsContainer.appendChild(chartDiv);
+
+                const diskValues = [diskData.used[i], diskData.free[i]];
+                const legendLabels = ['Used', 'Free'];
+                const capacity = diskData.total[i];
+                const pieLayout = {
+                    title: {
+                        text: diskLabels[i] + '<br>' + 'Capacity: ' + capacity + ' GB',
+                        font: { family: 'Courier New, monospace', size: 16 },
+                        xref: 'paper',
+                        x: 0.05,
+                    },
+                    height: 400,
+                    width: 400
+                };
+
+                Plotly.newPlot(chartId, [{
+                    values: diskValues,
+                    labels: legendLabels,
+                    type: 'pie'
+                }], pieLayout, { responsive: true });
+            }
+        }
+    </script>
+</body>
+
+</html>
