@@ -6,6 +6,8 @@ EUMETCAST File Manager is a web application that organizes files received from E
 
 ## Getting Started
 
+Install the web app as a deamon in Linux or a service in Windows. You can run also the program in a console.
+
 1. Access the web interface by opening your browser and navigating to:
    ```
    http://localhost:7000
