@@ -38,21 +38,21 @@ The function should not have any arguments and should return an error.
 package main
 
 import (
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
-	"sync"
-	"net"
-	"net/http"
 
 	"github.com/gorilla/websocket"
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -72,10 +72,10 @@ type StructDisks struct {
 }
 
 type YAMLConfig struct {
-	FileTemplates []StructTemplate 	`yaml:"filetemplates"`
-	BasePaths     []string         	`yaml:"basepaths"`
-	Disks         []StructDisks    	`yaml:"disks"`
-	PortNumber	  string			`yaml:"portnumber"`
+	FileTemplates []StructTemplate `yaml:"filetemplates"`
+	BasePaths     []string         `yaml:"basepaths"`
+	Disks         []StructDisks    `yaml:"disks"`
+	PortNumber    string           `yaml:"portnumber"`
 }
 
 var yamlconfig YAMLConfig
@@ -84,22 +84,21 @@ var portnumber = "7000"
 
 // SystemMetrics represents CPU and Disk data for sending to the client
 type SystemMetrics struct {
-	CoreUsages []float64   		`json:"core_usages"` // Percentage for each core
-	DiskUsed   []float64   		`json:"disks_used"`   // Percentage of disk space used
-	DiskFree   []float64   		`json:"disks_free"`   // Percentage of disk space free
-	Timestamp  int64       		`json:"timestamp"`   // Unix timestamp in milliseconds
-	DiskLabel  []string    		`json:"disks_label"`	// Label for disk
-	DiskTotal  []uint64    		`json:"disks_total"`	// Total disk space
-	AvailDirs  []string			`json:"avail_dirs"`
+	CoreUsages []float64 `json:"core_usages"` // Percentage for each core
+	DiskUsed   []float64 `json:"disks_used"`  // Percentage of disk space used
+	DiskFree   []float64 `json:"disks_free"`  // Percentage of disk space free
+	Timestamp  int64     `json:"timestamp"`   // Unix timestamp in milliseconds
+	DiskLabel  []string  `json:"disks_label"` // Label for disk
+	DiskTotal  []uint64  `json:"disks_total"` // Total disk space
+	AvailDirs  []string  `json:"avail_dirs"`
 }
 
 // Global variables
 var (
-	clients   = make(map[*websocket.Conn]bool)
+	clients = make(map[*websocket.Conn]bool)
 	//broadcast = make(chan SystemMetrics)
-	mutex     sync.Mutex
+	mutex sync.Mutex
 )
-
 
 // Function for the 10-second event
 func eventMoveFiles(done chan bool) {
@@ -129,31 +128,30 @@ func eventDeleteOldDirs(done chan bool) {
 }
 
 func convertYYYYDDDToYYYYMMDD(yyyydoy string) (string, error) {
-    if len(yyyydoy) != 7 {
-        return "", fmt.Errorf("invalid input length: expected 7 characters, got %d", len(yyyydoy))
-    }
+	if len(yyyydoy) != 7 {
+		return "", fmt.Errorf("invalid input length: expected 7 characters, got %d", len(yyyydoy))
+	}
 
-    yearStr := yyyydoy[0:4]
-    doyStr := yyyydoy[4:7]
+	yearStr := yyyydoy[0:4]
+	doyStr := yyyydoy[4:7]
 
-    year, err := strconv.Atoi(yearStr)
-    if err != nil {
-        return "", fmt.Errorf("invalid year: %v", err)
-    }
-    doy, err := strconv.Atoi(doyStr)
-    if err != nil {
-        return "", fmt.Errorf("invalid day-of-year: %v", err)
-    }
+	year, err := strconv.Atoi(yearStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid year: %v", err)
+	}
+	doy, err := strconv.Atoi(doyStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid day-of-year: %v", err)
+	}
 
-    // Get the date for January 1st of the given year.
-    startOfYear := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
-    // Add (doy-1) days to get the desired date.
-    date := startOfYear.AddDate(0, 0, doy-1)
-    return date.Format("20060102"), nil
+	// Get the date for January 1st of the given year.
+	startOfYear := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
+	// Add (doy-1) days to get the desired date.
+	date := startOfYear.AddDate(0, 0, doy-1)
+	return date.Format("20060102"), nil
 }
 
 func moveFilesToDateSubdirs() error {
-
 
 	fmt.Printf("Moving files to date subdirectories\n")
 
@@ -219,7 +217,6 @@ func moveFilesToDateSubdirs() error {
 				continue
 			}
 
-			
 			// Validate the date substring (YYYYMMDD)
 			var year, month, day string
 			if datelayout == "YYYYMMDD" {
@@ -230,7 +227,7 @@ func moveFilesToDateSubdirs() error {
 				year = dateStr[0:4]
 				month = dateStr[4:6]
 				day = dateStr[6:8]
-	
+
 			} else {
 				if len(dateStr) != 7 {
 					fmt.Printf("Warning: Invalid date %s in filename %s\n", dateStr, filename)
@@ -245,7 +242,6 @@ func moveFilesToDateSubdirs() error {
 				month = convertedDate[4:6]
 				day = convertedDate[6:8]
 			}
-
 
 			// Construct the new subdirectory path: basepath/YYYY/MM/DD
 			newSubdir := filepath.Join(basepath, year, month, day)
@@ -293,33 +289,42 @@ type DirectoryInfo struct {
 }
 
 func deleteOldDirectories() error {
-	//fmt.Println("Deleting old directories")
+	fmt.Println("Deleting old directories")
 	// Collect all DD directories (format YYYY/MM/DD) from each base path.
 	var directories []DirectoryInfo
-	var freediskspace int
-	freediskspace = 20
+	var requiredfreediskspace int
+	requiredfreediskspace = 20
 
 	for _, thedisk := range yamlconfig.Disks {
+
+		requiredfreediskspace = thedisk.FreeDiskSpace
 		freeSpace, err := getFreeSpacePercentage(thedisk.DiskName)
+		directories = []DirectoryInfo{}
+
+		//fmt.Printf("Disk : %s\n", thedisk.DiskName)
+		//fmt.Print("=====================\n")
 		if err != nil {
 			return fmt.Errorf("error getting free space: %v", err)
 		}
-		if int(math.Round(freeSpace)) >= freediskspace {
+		if int(math.Round(freeSpace)) >= requiredfreediskspace {
 			continue
 		}
 
+
 		for _, basePath := range yamlconfig.BasePaths {
+			if !strings.Contains(basePath, thedisk.DiskName) {
+				continue
+			}
+
+			//fmt.Printf("=============== %s =================\n", basePath)
+			directories = []DirectoryInfo{}
+
 			// Construct a glob pattern for candidate DD directories.
+			//fmt.Printf("Basepath = %s\n", basePath)
 			pattern := filepath.Join(basePath, "????", "??", "??")
 			matches, err := filepath.Glob(pattern)
 			if err != nil {
 				return fmt.Errorf("failed to glob pattern %s: %v", pattern, err)
-			}
-
-			if strings.Contains(basePath, thedisk.DiskName) {
-				freediskspace = thedisk.FreeDiskSpace
-			} else {
-				continue
 			}
 
 			// Process the matched paths.
@@ -342,36 +347,22 @@ func deleteOldDirectories() error {
 					continue
 				}
 				// Build a date key, e.g. 20220225.
-				//dateKey := year + month + day
+				dateKey := year + month + day
+				dateKeyInt, _ := strconv.ParseInt(dateKey, 10, 64)
 				directories = append(directories, DirectoryInfo{
 					Path:    match,
-					ModTime: 0, // Not used for sorting; we sort by dateKey instead.
-					// Reusing ModTime to store the numeric representation of date.
+					ModTime: dateKeyInt,
 				})
 			}
-		}
 
-		// Sort the directories by their date extracted from the relative path.
-		sort.Slice(directories, func(i, j int) bool {
-			// Assume the directory paths are in the format base/ YYYY/MM/DD.
-			// Extract the relative path and remove path separators.
-			getDateKey := func(path string) string {
-				// Find the position of the base directory among yamlconfig.BasePaths.
-				// We assume the first matching basePath.
-				for _, base := range yamlconfig.BasePaths {
-					rel, err := filepath.Rel(base, path)
-					if err == nil && rel != path {
-						// Remove path separators; "2022/02/25" becomes "20220225"
-						return strings.ReplaceAll(rel, string(os.PathSeparator), "")
-					}
-				}
-				return path
-			}
-			return getDateKey(directories[i].Path) < getDateKey(directories[j].Path)
-		})
+			// Sort the directories by their date extracted from the relative path.
+			sort.Slice(directories, func(i, j int) bool {
+				return directories[i].ModTime < directories[j].ModTime
+			})
 
-		// Loop until free disk space is freediskspace or more.
-		for len(directories) > 0 {
+			// for i, dirstr := range directories {
+			// 	fmt.Printf("i = %d ==> %s\n", i, dirstr.Path)
+			// }
 
 			freeSpace, err := getFreeSpacePercentage(thedisk.DiskName)
 			if err != nil {
@@ -379,13 +370,12 @@ func deleteOldDirectories() error {
 			}
 			fmt.Printf("Current free space: %.2f%%\n", freeSpace)
 
-			if int(math.Round(freeSpace)) >= freediskspace {
+			if int(math.Round(freeSpace)) >= requiredfreediskspace {
 				break
 			}
-
 			// Delete the oldest directory (first in the sorted slice).
 			oldestDir := directories[0]
-			fmt.Printf("Deleting directory: %s\n", oldestDir.Path)
+			//fmt.Printf("Deleting directory: %s\n", oldestDir.Path)
 			if err := os.RemoveAll(oldestDir.Path); err != nil {
 				return fmt.Errorf("error deleting directory %s: %v", oldestDir.Path, err)
 			}
@@ -393,10 +383,8 @@ func deleteOldDirectories() error {
 			// After deleting the DD directory, attempt to clean up empty parent directories.
 			cleanUpEmptyAncestors(oldestDir.Path)
 
-			// Remove the deleted directory from our slice.
-			directories = directories[1:]
-
 		}
+
 	}
 
 	return nil
@@ -498,25 +486,20 @@ func main() {
 
 	ips, err := GetLocalIPs()
 	if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Println(ips)
+		log.Fatal(err)
+	}
+	fmt.Println(ips)
+
 
 	err = moveFilesToDateSubdirs()
 	if err != nil {
 		fmt.Printf("Error moveFilesToDateSubdirs: %v\n", err)
 	}
-	// else {
-	// 	fmt.Println("File moving completed successfully.")
-	// }
 
 	err = deleteOldDirectories()
 	if err != nil {
 		fmt.Printf("Error DeleteOldDirectories: %v\n", err)
 	}
-	// else {
-	// 	fmt.Println("Delete old directories completed successfully.")
-	// }
 
 	fmt.Println("Starting event scheduler...")
 
@@ -527,7 +510,7 @@ func main() {
 	go eventDeleteOldDirs(done)
 	go eventMoveFiles(done)
 
-//	select {}
+	//	select {}
 
 	// Start collecting and broadcasting metrics
 	go collectMetrics()
@@ -542,11 +525,10 @@ func main() {
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	// Register /disks endpoint to list available hard disks
-    http.HandleFunc("/disks", diskListHandler)
+	http.HandleFunc("/disks", diskListHandler)
 
 	log.Println("Server starting on :" + portnumber + "...")
-	log.Fatal(http.ListenAndServe(":" + portnumber, nil))
-
+	log.Fatal(http.ListenAndServe(":"+portnumber, nil))
 
 }
 
@@ -564,28 +546,27 @@ func collectMetrics() {
 
 	for range ticker.C {
 		counter++
-        
+
 		var diskused []float64
 		var diskfree []float64
 		var disktotal []uint64
 		var disklabels []string
-		
-		
-        // Execute checkDateDirs every 10 seconds
-        if counter >= 60 {
+
+		// Execute checkDateDirs every 10 seconds
+		if counter >= 60 {
 			availdirs = nil
 			for _, basePath := range yamlconfig.BasePaths {
-            	//fmt.Printf("Checking date directories... %s\n", basePath)
-				
-            	thedirstring, err := constructDirString(basePath)
-            	if err != nil {
-	                fmt.Printf("Error checking directories: %v\n", err)
-            	}
-				
+				//fmt.Printf("Checking date directories... %s\n", basePath)
+
+				thedirstring, err := constructDirString(basePath)
+				if err != nil {
+					fmt.Printf("Error checking directories: %v\n", err)
+				}
+
 				availdirs = append(availdirs, thedirstring)
 			}
-            // Reset the counter
-            counter = 0
+			// Reset the counter
+			counter = 0
 		}
 		// Get CPU usage per core
 		usages, err := cpu.Percent(0, true) // Get per-core CPU usage, 0 for instantaneous
@@ -601,10 +582,10 @@ func collectMetrics() {
 				continue
 			}
 			diskused = append(diskused, diskUsage.UsedPercent)
-			disktotal = append(disktotal, diskUsage.Total / 1024 / 1024 / 1024)
-			diskfree = append(diskfree, 100 - diskUsage.UsedPercent)
+			disktotal = append(disktotal, diskUsage.Total/1024/1024/1024)
+			diskfree = append(diskfree, 100-diskUsage.UsedPercent)
 			disklabels = append(disklabels, disk.DiskName)
-			
+
 		}
 
 		now := time.Now().UnixMilli()
@@ -619,12 +600,12 @@ func collectMetrics() {
 		}
 
 		// Copy current CPU usage to metrics
-		copy(metrics.CoreUsages, usages) // Usage in percentage (0-100)
-		copy(metrics.DiskUsed, diskused) // Usage in percentage (0-100)
-		copy(metrics.DiskFree, diskfree) // Usage in percentage (0-100)
+		copy(metrics.CoreUsages, usages)    // Usage in percentage (0-100)
+		copy(metrics.DiskUsed, diskused)    // Usage in percentage (0-100)
+		copy(metrics.DiskFree, diskfree)    // Usage in percentage (0-100)
 		copy(metrics.DiskLabel, disklabels) // Usage in percentage (0-100)
-		copy(metrics.DiskTotal, disktotal) // Usage in percentage (0-100)
-		copy(metrics.AvailDirs, availdirs) 
+		copy(metrics.DiskTotal, disktotal)  // Usage in percentage (0-100)
+		copy(metrics.AvailDirs, availdirs)
 
 		// Add new data to history
 		mutex.Lock()
@@ -696,115 +677,115 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func diskListHandler(w http.ResponseWriter, r *http.Request) {
-    partitions, err := disk.Partitions(true)
-    if err != nil {
-        http.Error(w, "Failed to get partitions", http.StatusInternalServerError)
-        return
-    }
+	partitions, err := disk.Partitions(true)
+	if err != nil {
+		http.Error(w, "Failed to get partitions", http.StatusInternalServerError)
+		return
+	}
 
-    // Optionally build a custom list if you don't need all partition details.
+	// Optionally build a custom list if you don't need all partition details.
 	type diskInfo struct {
 		Device     string   `json:"device"`
 		Mountpoint string   `json:"mountpoint"`
 		Fstype     string   `json:"fstype"`
 		Opts       []string `json:"opts"`
 	}
-    disks := []diskInfo{}
-    for _, p := range partitions {
-        disks = append(disks, diskInfo{
-            Device:     p.Device,
-            Mountpoint: p.Mountpoint,
-            Fstype:     p.Fstype,
-            Opts:       p.Opts,
-        })
-    }
+	disks := []diskInfo{}
+	for _, p := range partitions {
+		disks = append(disks, diskInfo{
+			Device:     p.Device,
+			Mountpoint: p.Mountpoint,
+			Fstype:     p.Fstype,
+			Opts:       p.Opts,
+		})
+	}
 
-    jsonData, err := json.Marshal(disks)
-    if err != nil {
-        http.Error(w, "Failed to marshal disks", http.StatusInternalServerError)
-        return
-    }
+	jsonData, err := json.Marshal(disks)
+	if err != nil {
+		http.Error(w, "Failed to marshal disks", http.StatusInternalServerError)
+		return
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    w.Write(jsonData)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(jsonData)
 }
 
 func GetLocalIP() net.IP {
-    conn, err := net.Dial("udp", "80.80.80.80:80")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer conn.Close()
+	conn, err := net.Dial("udp", "80.80.80.80:80")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
 
-    localAddress := conn.LocalAddr().(*net.UDPAddr)
+	localAddress := conn.LocalAddr().(*net.UDPAddr)
 
-    return localAddress.IP
+	return localAddress.IP
 }
 
 func GetLocalIPs() ([]net.IP, error) {
-    var ips []net.IP
-    addresses, err := net.InterfaceAddrs()
-    if err != nil {
-        return nil, err
-    }
+	var ips []net.IP
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
 
-    for _, addr := range addresses {
-        if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-            if ipnet.IP.To4() != nil {
-                ips = append(ips, ipnet.IP)
-            }
-        }
-    }
-    return ips, nil
+	for _, addr := range addresses {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				ips = append(ips, ipnet.IP)
+			}
+		}
+	}
+	return ips, nil
 }
 
 func constructDirString(basePath string) (string, error) {
 	var availDirs string
-	
+
 	// Get list of year directories
 	years, err := os.ReadDir(basePath)
-    
-    if err != nil {
-        return "", err
-    }
+
+	if err != nil {
+		return "", err
+	}
 	var basePathstr = basePath + "|"
-    for _, year := range years {
-		
-        if !year.IsDir() {
-            continue // Skip if not a directory
-        }
-        yearPath := filepath.Join(basePath, year.Name())
+	for _, year := range years {
+
+		if !year.IsDir() {
+			continue // Skip if not a directory
+		}
+		yearPath := filepath.Join(basePath, year.Name())
 
 		availDirs = basePathstr + "Y:" + year.Name()
 
-        // Get months for this year
-        months, err := os.ReadDir(yearPath)
-        if err != nil {
-            return "", err
-        }
-        
-        for _, month := range months {
+		// Get months for this year
+		months, err := os.ReadDir(yearPath)
+		if err != nil {
+			return "", err
+		}
 
-            if !month.IsDir() {
-                continue
-            }
+		for _, month := range months {
+
+			if !month.IsDir() {
+				continue
+			}
 			availDirs += "-M:" + month.Name() + "-D:"
-            monthPath := filepath.Join(yearPath, month.Name())
-            
-            // Get days for this month
-            days, err := os.ReadDir(monthPath)
-            if err != nil {
-                return "", err
-            }
-            
-            for _, day := range days {
-                if !day.IsDir() {
-                    continue
-                }
+			monthPath := filepath.Join(yearPath, month.Name())
+
+			// Get days for this month
+			days, err := os.ReadDir(monthPath)
+			if err != nil {
+				return "", err
+			}
+
+			for _, day := range days {
+				if !day.IsDir() {
+					continue
+				}
 				availDirs += day.Name() + ","
 			}
-        }
-    }
-    
-    return availDirs, nil	
+		}
+	}
+
+	return availDirs, nil
 }
