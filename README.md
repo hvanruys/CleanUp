@@ -19,7 +19,7 @@ Install the web app as a deamon in Linux or a service in Windows. You can run al
 
 ### File Organization
 
-Files received from EUMETCAST are automatically sorted into directories with the format `YYYYMMDD` (or `YYYYDDD` for some files) based on date information extracted from the filenames. The system uses the configuration file to determine:
+Files received from EUMETCAST are automatically sorted into directories with the format `YYYY/MM/DD` based on date information extracted from the filenames. The date in the filenames can be of the form YYYYMMDD or YYYYDDD. The system uses the configuration file to determine:
 
 - Which files to process (based on filename patterns)
 - Where to extract the date information from each filename
