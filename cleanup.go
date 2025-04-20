@@ -57,6 +57,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
 	"gopkg.in/yaml.v3"
 )
 
@@ -84,13 +85,17 @@ var portnumber = "7000"
 
 // SystemMetrics represents CPU and Disk data for sending to the client
 type SystemMetrics struct {
-	CoreUsages []float64 `json:"core_usages"` // Percentage for each core
-	DiskUsed   []float64 `json:"disks_used"`  // Percentage of disk space used
-	DiskFree   []float64 `json:"disks_free"`  // Percentage of disk space free
-	Timestamp  int64     `json:"timestamp"`   // Unix timestamp in milliseconds
-	DiskLabel  []string  `json:"disks_label"` // Label for disk
-	DiskTotal  []uint64  `json:"disks_total"` // Total disk space
-	AvailDirs  []string  `json:"avail_dirs"`
+	CoreUsages  []float64 `json:"core_usages"` // Percentage for each core
+	DiskUsed    []float64 `json:"disks_used"`  // Percentage of disk space used
+	DiskFree    []float64 `json:"disks_free"`  // Percentage of disk space free
+	Timestamp   int64     `json:"timestamp"`   // Unix timestamp in milliseconds
+	DiskLabel   []string  `json:"disks_label"` // Label for disk
+	DiskTotal   []uint64  `json:"disks_total"` // Total disk space
+	AvailDirs   []string  `json:"avail_dirs"`
+	MemoryUsed  float64   `json:"memory_used"`  // Percentage of memory used
+	MemoryFree  float64   `json:"memory_free"`  // Percentage of memory free
+	MemoryTotal uint64    `json:"memory_total"` // Total memory in MB
+
 }
 
 // Global variables
@@ -122,6 +127,7 @@ func eventDeleteOldDirs(done chan bool) {
 			return
 		default:
 			fmt.Println("Event 2: Executing every 30 minutes")
+			deleteOldDirectories()
 			time.Sleep(30 * time.Minute)
 		}
 	}
@@ -301,8 +307,8 @@ func deleteOldDirectories() error {
 		freeSpace, err := getFreeSpacePercentage(thedisk.DiskName)
 		directories = []DirectoryInfo{}
 
-		//fmt.Printf("Disk : %s\n", thedisk.DiskName)
-		//fmt.Print("=====================\n")
+		fmt.Printf("Disk: %s free space %f required:%d \n", thedisk.DiskName, freeSpace, requiredfreediskspace)
+		fmt.Print("=======================================================\n")
 		if err != nil {
 			return fmt.Errorf("error getting free space: %v", err)
 		}
@@ -310,79 +316,88 @@ func deleteOldDirectories() error {
 			continue
 		}
 
+		for {
 
-		for _, basePath := range yamlconfig.BasePaths {
-			if !strings.Contains(basePath, thedisk.DiskName) {
-				continue
-			}
-
-			//fmt.Printf("=============== %s =================\n", basePath)
 			directories = []DirectoryInfo{}
 
-			// Construct a glob pattern for candidate DD directories.
-			//fmt.Printf("Basepath = %s\n", basePath)
-			pattern := filepath.Join(basePath, "????", "??", "??")
-			matches, err := filepath.Glob(pattern)
-			if err != nil {
-				return fmt.Errorf("failed to glob pattern %s: %v", pattern, err)
-			}
-
-			// Process the matched paths.
-			for _, match := range matches {
-				info, err := os.Stat(match)
-				if err != nil || !info.IsDir() {
+			for _, basePath := range yamlconfig.BasePaths {
+				if !strings.Contains(basePath, thedisk.DiskName) {
 					continue
 				}
-				// Get the relative path from basePath; expected to be "YYYY/MM/DD"
-				relPath, err := filepath.Rel(basePath, match)
+
+				freeSpace, err := getFreeSpacePercentage(thedisk.DiskName)
 				if err != nil {
-					continue
+					return fmt.Errorf("error getting free space: %v", err)
 				}
-				parts := strings.Split(relPath, string(os.PathSeparator))
-				if len(parts) != 3 {
-					continue
+
+				// if int(math.Round(freeSpace)) >= requiredfreediskspace {
+				// 	break
+				// }
+
+				fmt.Printf("Current free space for disk %s: %.2f%%\n", thedisk.DiskName, freeSpace)
+
+				//fmt.Printf("=============== %s =================\n", basePath)
+				directories = []DirectoryInfo{}
+
+				// Construct a glob pattern for candidate DD directories.
+				//fmt.Printf("Basepath = %s\n", basePath)
+				pattern := filepath.Join(basePath, "????", "??", "??")
+				matches, err := filepath.Glob(pattern)
+				if err != nil {
+					return fmt.Errorf("failed to glob pattern %s: %v", pattern, err)
 				}
-				year, month, day := parts[0], parts[1], parts[2]
-				if len(year) != 4 || len(month) != 2 || len(day) != 2 {
-					continue
+
+				// Process the matched paths.
+				for _, match := range matches {
+					info, err := os.Stat(match)
+					if err != nil || !info.IsDir() {
+						continue
+					}
+					// Get the relative path from basePath; expected to be "YYYY/MM/DD"
+					relPath, err := filepath.Rel(basePath, match)
+					if err != nil {
+						continue
+					}
+					parts := strings.Split(relPath, string(os.PathSeparator))
+					if len(parts) != 3 {
+						continue
+					}
+					year, month, day := parts[0], parts[1], parts[2]
+					if len(year) != 4 || len(month) != 2 || len(day) != 2 {
+						continue
+					}
+					// Build a date key, e.g. 20220225.
+					dateKey := year + month + day
+					dateKeyInt, _ := strconv.ParseInt(dateKey, 10, 64)
+					directories = append(directories, DirectoryInfo{
+						Path:    match,
+						ModTime: dateKeyInt,
+					})
 				}
-				// Build a date key, e.g. 20220225.
-				dateKey := year + month + day
-				dateKeyInt, _ := strconv.ParseInt(dateKey, 10, 64)
-				directories = append(directories, DirectoryInfo{
-					Path:    match,
-					ModTime: dateKeyInt,
+
+				// Sort the directories by their date extracted from the relative path.
+				sort.Slice(directories, func(i, j int) bool {
+					return directories[i].ModTime < directories[j].ModTime
 				})
+
+				// for i, dirstr := range directories {
+				// 	fmt.Printf("i = %d ==> %s\n", i, dirstr.Path)
+				// }
+
+				// Delete the oldest directory (first in the sorted slice).
+				oldestDir := directories[0]
+				fmt.Printf("Deleting directory: %s\n", oldestDir.Path)
+				if err := os.RemoveAll(oldestDir.Path); err != nil {
+					return fmt.Errorf("error deleting directory %s: %v", oldestDir.Path, err)
+				}
+
+				// After deleting the DD directory, attempt to clean up empty parent directories.
+				cleanUpEmptyAncestors(oldestDir.Path)
+
 			}
-
-			// Sort the directories by their date extracted from the relative path.
-			sort.Slice(directories, func(i, j int) bool {
-				return directories[i].ModTime < directories[j].ModTime
-			})
-
-			// for i, dirstr := range directories {
-			// 	fmt.Printf("i = %d ==> %s\n", i, dirstr.Path)
-			// }
-
-			freeSpace, err := getFreeSpacePercentage(thedisk.DiskName)
-			if err != nil {
-				return fmt.Errorf("error getting free space: %v", err)
-			}
-			fmt.Printf("Current free space: %.2f%%\n", freeSpace)
-
-			if int(math.Round(freeSpace)) >= requiredfreediskspace {
+			if int(math.Round(freeSpace)) < requiredfreediskspace {
 				break
 			}
-			// Delete the oldest directory (first in the sorted slice).
-			oldestDir := directories[0]
-			//fmt.Printf("Deleting directory: %s\n", oldestDir.Path)
-			if err := os.RemoveAll(oldestDir.Path); err != nil {
-				return fmt.Errorf("error deleting directory %s: %v", oldestDir.Path, err)
-			}
-
-			// After deleting the DD directory, attempt to clean up empty parent directories.
-			cleanUpEmptyAncestors(oldestDir.Path)
-
 		}
 
 	}
@@ -490,7 +505,6 @@ func main() {
 	}
 	fmt.Println(ips)
 
-
 	err = moveFilesToDateSubdirs()
 	if err != nil {
 		fmt.Printf("Error moveFilesToDateSubdirs: %v\n", err)
@@ -588,6 +602,13 @@ func collectMetrics() {
 
 		}
 
+		// Get memory statistics
+		memUsed, memFree, memTotal, err := getMemoryStats()
+		if err != nil {
+			log.Printf("Error getting memory stats: %v", err)
+			continue
+		}
+
 		now := time.Now().UnixMilli()
 		metrics := SystemMetrics{
 			CoreUsages: make([]float64, len(usages)),
@@ -597,6 +618,9 @@ func collectMetrics() {
 			DiskLabel:  make([]string, len(disklabels)),
 			DiskTotal:  make([]uint64, len(disktotal)),
 			AvailDirs:  make([]string, len(availdirs)),
+			MemoryUsed:  memUsed,
+            MemoryFree:  memFree,
+            MemoryTotal: memTotal,
 		}
 
 		// Copy current CPU usage to metrics
@@ -606,6 +630,7 @@ func collectMetrics() {
 		copy(metrics.DiskLabel, disklabels) // Usage in percentage (0-100)
 		copy(metrics.DiskTotal, disktotal)  // Usage in percentage (0-100)
 		copy(metrics.AvailDirs, availdirs)
+
 
 		// Add new data to history
 		mutex.Lock()
@@ -788,4 +813,19 @@ func constructDirString(basePath string) (string, error) {
 	}
 
 	return availDirs, nil
+}
+
+// getMemoryStats returns memory usage statistics
+func getMemoryStats() (used float64, free float64, total uint64, err error) {
+	memory, err := mem.VirtualMemory()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	// Convert values
+	used = memory.UsedPercent            // Percentage of memory used
+	free = 100.0 - memory.UsedPercent    // Percentage of memory free
+	total = memory.Total / (1024 * 1024) // Total memory in MB
+
+	return used, free, total, nil
 }
