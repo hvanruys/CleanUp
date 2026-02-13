@@ -325,22 +325,7 @@ func deleteOldDirectories() error {
 					continue
 				}
 
-				freeSpace, err := getFreeSpacePercentage(thedisk.DiskName)
-				if err != nil {
-					return fmt.Errorf("error getting free space: %v", err)
-				}
-
-				// if int(math.Round(freeSpace)) >= requiredfreediskspace {
-				// 	break
-				// }
-
-				fmt.Printf("Current free space for disk %s: %.2f%%\n", thedisk.DiskName, freeSpace)
-
-				//fmt.Printf("=============== %s =================\n", basePath)
-				directories = []DirectoryInfo{}
-
 				// Construct a glob pattern for candidate DD directories.
-				//fmt.Printf("Basepath = %s\n", basePath)
 				pattern := filepath.Join(basePath, "????", "??", "??")
 				matches, err := filepath.Glob(pattern)
 				if err != nil {
@@ -375,27 +360,37 @@ func deleteOldDirectories() error {
 					})
 				}
 
-				// Sort the directories by their date extracted from the relative path.
-				sort.Slice(directories, func(i, j int) bool {
-					return directories[i].ModTime < directories[j].ModTime
-				})
-
-				// for i, dirstr := range directories {
-				// 	fmt.Printf("i = %d ==> %s\n", i, dirstr.Path)
-				// }
-
-				// Delete the oldest directory (first in the sorted slice).
-				oldestDir := directories[0]
-				fmt.Printf("Deleting directory: %s\n", oldestDir.Path)
-				if err := os.RemoveAll(oldestDir.Path); err != nil {
-					return fmt.Errorf("error deleting directory %s: %v", oldestDir.Path, err)
 				}
 
-				// After deleting the DD directory, attempt to clean up empty parent directories.
-				cleanUpEmptyAncestors(oldestDir.Path)
-
+			// Check if there are any directories to delete
+			if len(directories) == 0 {
+				fmt.Printf("No more directories to delete for disk %s, but free space is still below required (%d%%)\n",
+					thedisk.DiskName, requiredfreediskspace)
+				break
 			}
-			if int(math.Round(freeSpace)) < requiredfreediskspace {
+
+			// Sort the directories by their date extracted from the relative path.
+			sort.Slice(directories, func(i, j int) bool {
+				return directories[i].ModTime < directories[j].ModTime
+			})
+
+			// Delete the oldest directory (first in the sorted slice).
+			oldestDir := directories[0]
+			fmt.Printf("Deleting directory: %s\n", oldestDir.Path)
+			if err := os.RemoveAll(oldestDir.Path); err != nil {
+				return fmt.Errorf("error deleting directory %s: %v", oldestDir.Path, err)
+			}
+
+			// After deleting the DD directory, attempt to clean up empty parent directories.
+			cleanUpEmptyAncestors(oldestDir.Path)
+
+			// Check if we've reached the required free space
+			freeSpace, err = getFreeSpacePercentage(thedisk.DiskName)
+			if err != nil {
+				return fmt.Errorf("error getting free space: %v", err)
+			}
+			if int(math.Round(freeSpace)) >= requiredfreediskspace {
+				fmt.Printf("Reached required free space (%.2f%%) for disk %s\n", freeSpace, thedisk.DiskName)
 				break
 			}
 		}
